@@ -1,0 +1,19 @@
+language: go
+
+sudo: required
+dist: trusty
+
+services:
+  - postgresql
+
+addons:
+  postgresql: "9.3"
+
+before_script:
+  - psql -c 'create database distribution;' -U postgres
+
+script:
+  - go test -test.v -test.short -coverprofile=coverage.txt -covermode=atomic ./...
+
+after_success:
+  - bash <(curl -s https://codecov.io/bash)
