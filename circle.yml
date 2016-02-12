@@ -1,0 +1,73 @@
+# Based on docker/distribution circle.yaml. Thanks them for it! ;)
+machine:
+  pre:
+  # Install gvm
+    - bash < <(curl -s -S -L https://raw.githubusercontent.com/moovweb/gvm/1.0.22/binscripts/gvm-installer)
+  # Install codecov for coverage
+    - pip install --user codecov
+
+  post:
+  # go
+    - gvm install go1.5.3 --prefer-binary --name=stable
+
+  environment:
+  # Convenient shortcuts to "common" locations
+    CHECKOUT: /home/ubuntu/$CIRCLE_PROJECT_REPONAME
+    BASE_DIR: src/github.com/$CIRCLE_PROJECT_USERNAME/$CIRCLE_PROJECT_REPONAME
+  # Trick circle brainflat "no absolute path" behavior
+    BASE_STABLE: ../../../$HOME/.gvm/pkgsets/stable/global/$BASE_DIR
+  # Workaround Circle parsing dumb bugs and/or YAML wonkyness
+    CIRCLE_PAIN: "mode: set"
+
+dependencies:
+  pre:
+  # Copy the code to the gopath of all go versions
+    - >
+      gvm use stable &&
+      mkdir -p "$(dirname $BASE_STABLE)" &&
+      cp -R "$CHECKOUT" "$BASE_STABLE"
+
+  override:
+  # Install dependencies for every copied clone/go version
+    - gvm use stable && go get github.com/tools/godep:
+        pwd: $BASE_STABLE
+
+  post:
+  # For the stable go version, additionally install linting tools
+    - >
+      gvm use stable &&
+      go get github.com/axw/gocov/gocov github.com/golang/lint/golint
+
+test:
+  pre:
+  # Output the go versions we are going to test
+    # - gvm use old && go version
+    - gvm use stable && go version
+
+  # First thing: build everything. This will catch compile errors, and it's
+  # also necessary for go vet to work properly (see #807).
+    - gvm use stable && go install ./...:
+        pwd: $BASE_STABLE
+
+  # Install deps
+    - gvm use stable; go get -v github.com/lib/pq gopkg.in/check.v1:
+        pwd: $BASE_STABLE
+
+  # FMT
+    - gvm use stable && test -z "$(gofmt -s -l . | grep -v Godeps/_workspace/src/ | tee /dev/stderr)":
+        pwd: $BASE_STABLE
+
+   # VET
+    - gvm use stable && go vet ./...:
+        pwd: $BASE_STABLE
+
+  override:
+  # Test stable, and report
+     - gvm use stable; go test -v -coverprofile=coverage.txt -covermode=atomic ./...:
+         timeout: 600
+         pwd: $BASE_STABLE
+
+  post:
+  # Report to codecov
+    - bash <(curl -s https://codecov.io/bash):
+        pwd: $BASE_STABLE
