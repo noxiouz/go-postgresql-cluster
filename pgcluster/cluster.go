@@ -46,15 +46,15 @@ func NewPostgreSQLCluster(drivername string, connStrings []string) (*Cluster, er
 	}
 
 	for _, connStr := range connStrings {
+		if _, ok := dbs[connStr]; ok {
+			cleanUpDBs(dbs)
+			return nil, ErrDublicatedDataSource
+		}
+
 		db, err := sql.Open(drivername, connStr)
 		if err != nil {
 			cleanUpDBs(dbs)
 			return nil, err
-		}
-
-		if _, ok := dbs[connStr]; ok {
-			cleanUpDBs(dbs)
-			return nil, ErrDublicatedDataSource
 		}
 
 		dbs[connStr] = db
