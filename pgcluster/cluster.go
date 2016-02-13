@@ -71,6 +71,8 @@ func NewPostgreSQLCluster(drivername string, connStrings []string) (*Cluster, er
 
 	cluster.electMaster()
 
+	go cluster.overwatch()
+
 	return cluster, nil
 }
 
