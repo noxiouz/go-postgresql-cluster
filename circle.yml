@@ -19,6 +19,10 @@ machine:
   # Workaround Circle parsing dumb bugs and/or YAML wonkyness
     CIRCLE_PAIN: "mode: set"
 
+  services:
+    - docker
+
+
 dependencies:
   pre:
   # Copy the code to the gopath of all go versions
@@ -37,6 +41,7 @@ dependencies:
     - >
       gvm use stable &&
       go get github.com/axw/gocov/gocov github.com/golang/lint/golint
+    - curl -L https://github.com/docker/compose/releases/download/1.5.0/docker-compose-`uname -s`-`uname -m` > ../bin/docker-compose && chmod +x ../bin/docker-compose
 
 test:
   pre:
