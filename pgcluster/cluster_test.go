@@ -55,6 +55,23 @@ func (s *ClusterSuite) SetUpSuite(c *C) {
 	time.Sleep(10 * time.Second)
 }
 
+func (s *ClusterSuite) SwitchOver(c *C) {
+	// stop current master
+	output, err := exec.Command("docker-compose", "-f", composeFile, "stop", "master").CombinedOutput()
+	if err != nil {
+		c.Fatalf("unable to stop PostgreSQL master via compose: %v. Output %s", err, output)
+	}
+	time.Sleep(time.Second * 1)
+
+	// promote slave
+	output, err = exec.Command("docker", "exec", "--user=postgres", "tests_slave_1",
+		"/usr/lib/postgresql/9.4/bin/pg_ctl", "promote", "-D", "/var/lib/postgresql/9.4/main").CombinedOutput()
+	if err != nil {
+		c.Fatalf("unable to start PostgreSQL cluster via compose: %v. Output %s", err, output)
+	}
+	time.Sleep(time.Second * 1)
+}
+
 func (s *ClusterSuite) TearDownSuite(c *C) {
 	//docker-compose -f tests/docker-compose.yml stop
 	output, err := exec.Command("docker-compose", "-f", composeFile, "stop").CombinedOutput()
@@ -106,4 +123,22 @@ func (s *ClusterSuite) TestOverWatch(c *C) {
 	c.Assert(err, IsNil)
 
 	c.Assert(db1 == db2, Equals, true)
+}
+
+func (s *ClusterSuite) TestReElect(c *C) {
+	var connStrings = getConnStrings()
+
+	cluster, err := NewPostgreSQLCluster("postgres", connStrings)
+	c.Assert(err, IsNil)
+	defer cluster.Close()
+
+	db1 := cluster.DB(MASTER)
+	c.Assert(db1.Ping(), IsNil)
+
+	s.SwitchOver(c)
+	c.Assert(isMaster(db1), Equals, false)
+
+	cluster.ReElect()
+	master := cluster.DB(MASTER)
+	c.Assert(master.Ping(), IsNil)
 }
