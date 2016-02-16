@@ -134,6 +134,13 @@ func (c *Cluster) DB(role Role) *sql.DB {
 	}
 }
 
+// ReElect verifies if the current master is really master.
+// New master will be elected if needed. This can be called after connections
+// errors detection.
+func (c *Cluster) ReElect() {
+	c.electMaster()
+}
+
 func (c *Cluster) overwatch() {
 	for {
 		select {
