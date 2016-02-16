@@ -3,27 +3,41 @@ package pgcluster
 import (
 	"database/sql"
 	"errors"
+	"expvar"
 	"fmt"
 	"sync/atomic"
 	"time"
 )
 
+// Role is a role in the cluster of requested node
 type Role int
 
 const (
+	// MASTER is the master one in a cluster
 	MASTER Role = iota
+	// SLAVE is a replication node in a cluster
 	SLAVE
 )
 
 var (
 	// ErrDublicatedDataSource means that connStrings contains duplicated items
 	ErrDublicatedDataSource = errors.New("duplicated data source")
-	ErrZeroDataSource       = errors.New("data source muts contain at least one item")
+	// ErrZeroDataSource means that an empty connStrings was passed
+	ErrZeroDataSource = errors.New("data source must contain at least one item")
+
+	pgClusterStats = expvar.NewMap("pgcluster_stats")
+	masterVar      = new(expvar.Int)
+	lastElection   = new(expvar.String)
 )
+
+func init() {
+	pgClusterStats.Set("master", masterVar)
+	pgClusterStats.Set("last_election", lastElection)
+}
 
 // Cluster represents a PostgreSQL cluster keeping track of a current master
 type Cluster struct {
-	dbs map[string]*sql.DB
+	dbs []*sql.DB
 
 	currentMaster atomic.Value
 
@@ -33,23 +47,25 @@ type Cluster struct {
 // NewPostgreSQLCluster creates Cluster. Drivername can be specified,
 // but must point to a PostgreSQL driver.
 func NewPostgreSQLCluster(drivername string, connStrings []string) (*Cluster, error) {
-	cleanUpDBs := func(dbs map[string]*sql.DB) {
+	cleanUpDBs := func(dbs []*sql.DB) {
 		for _, db := range dbs {
 			db.Close()
 		}
 	}
 
-	dbs := make(map[string]*sql.DB, len(connStrings))
+	dedup := make(map[string]struct{})
+	dbs := make([]*sql.DB, 0, len(connStrings))
 
 	if len(connStrings) == 0 {
 		return nil, ErrZeroDataSource
 	}
 
 	for _, connStr := range connStrings {
-		if _, ok := dbs[connStr]; ok {
+		if _, ok := dedup[connStr]; ok {
 			cleanUpDBs(dbs)
 			return nil, ErrDublicatedDataSource
 		}
+		dedup[connStr] = struct{}{}
 
 		db, err := sql.Open(drivername, connStr)
 		if err != nil {
@@ -57,7 +73,7 @@ func NewPostgreSQLCluster(drivername string, connStrings []string) (*Cluster, er
 			return nil, err
 		}
 
-		dbs[connStr] = db
+		dbs = append(dbs, db)
 	}
 
 	cluster := &Cluster{
@@ -66,8 +82,9 @@ func NewPostgreSQLCluster(drivername string, connStrings []string) (*Cluster, er
 		stopCh: make(chan struct{}),
 	}
 
-	// electMaster relies on the fact that the value is Stored
-	cluster.currentMaster.Store(dbs[connStrings[0]])
+	// electMaster relies on the fact that the value is Stored,
+	// so pick the random one
+	cluster.setMaster(0, dbs[0])
 
 	cluster.electMaster()
 
@@ -93,6 +110,11 @@ func (c *Cluster) Close() error {
 	}
 
 	return nil
+}
+
+func (c *Cluster) setMaster(pos int, db *sql.DB) {
+	masterVar.Set(int64(pos))
+	c.currentMaster.Store(db)
 }
 
 // DB returns *sql.DB suggested to be a master in the cluster.
@@ -125,15 +147,16 @@ func (c *Cluster) overwatch() {
 }
 
 func (c *Cluster) electMaster() {
+	lastElection.Set(time.Now().String())
 	currentDB := c.currentMaster.Load().(*sql.DB)
 	if isMaster(currentDB) {
 		return
 	}
 
-	for _, db := range c.dbs {
+	for pos, db := range c.dbs {
 		// TODO: skip currentDB
 		if isMaster(db) {
-			c.currentMaster.Store(db)
+			c.setMaster(pos, db)
 		}
 	}
 }
