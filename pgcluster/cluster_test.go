@@ -2,6 +2,7 @@ package pgcluster
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"testing"
 	"time"
@@ -16,9 +17,8 @@ func Test(t *testing.T) { TestingT(t) }
 
 func init() {
 	Suite(&ClusterSuite{})
+	Suite(&ClusterErrorSuite{})
 }
-
-type ClusterSuite struct{}
 
 const (
 	composeFile = "../tests/docker-compose.yml"
@@ -45,17 +45,53 @@ func getConnStrings() []string {
 	}
 }
 
-func (s *ClusterSuite) SetUpSuite(c *C) {
+type ClusterErrorSuite struct{}
+
+func (s *ClusterErrorSuite) TestZeroDataSourceError(c *C) {
+	_, err := NewPostgreSQLCluster("postgres", []string{})
+	c.Assert(err, Equals, ErrZeroDataSource)
+}
+
+func (s *ClusterErrorSuite) TestInvalidSourceError(c *C) {
+	_, err := NewPostgreSQLCluster("postgresssfdf", []string{"postgres://bob/?sslmode=off"})
+	c.Assert(err, Not(IsNil))
+}
+
+func (s *ClusterErrorSuite) TestDublicatedDataSource(c *C) {
+	var connStrings = []string{
+		"user=ubuntu dbname=circle_test",
+		"user=ubuntu dbname=circle_test",
+	}
+
+	_, err := NewPostgreSQLCluster("postgres", connStrings)
+	c.Assert(err, Equals, ErrDublicatedDataSource)
+}
+
+type ClusterSuite struct {
+	cluster *Cluster
+}
+
+func (s *ClusterSuite) SetUpTest(c *C) {
 	//docker-compose -f tests/docker-compose.yml up -d
-	output, err := exec.Command("docker-compose", "-f", composeFile, "up", "-d", "--force-recreate").CombinedOutput()
+	output, err := exec.Command("docker-compose", "-f", composeFile, "up", "-d").CombinedOutput()
 	if err != nil {
 		c.Fatalf("unable to start PostgreSQL cluster via compose: %v. Output %s", err, output)
 	}
 	// TODO: poll
 	time.Sleep(10 * time.Second)
+
+	var connStrings = getConnStrings()
+	cluster, err := NewPostgreSQLCluster("postgres", connStrings)
+	c.Assert(err, IsNil)
+
+	s.cluster = cluster
 }
 
 func (s *ClusterSuite) SwitchOver(c *C) {
+	if os.Getenv("CIRCLECI") == "true" {
+		c.Skip("CIRCLECI uses docker with lxc-driver. Unable to switch master via pg_ctl inside a container")
+	}
+
 	// stop current master
 	output, err := exec.Command("docker-compose", "-f", composeFile, "stop", "master").CombinedOutput()
 	if err != nil {
@@ -69,10 +105,13 @@ func (s *ClusterSuite) SwitchOver(c *C) {
 	if err != nil {
 		c.Fatalf("unable to start PostgreSQL cluster via compose: %v. Output %s", err, output)
 	}
-	time.Sleep(time.Second * 1)
+	time.Sleep(time.Second * 5)
 }
 
-func (s *ClusterSuite) TearDownSuite(c *C) {
+func (s *ClusterSuite) TearDownTest(c *C) {
+	if s.cluster != nil {
+		s.cluster.Close()
+	}
 	//docker-compose -f tests/docker-compose.yml stop
 	output, err := exec.Command("docker-compose", "-f", composeFile, "stop").CombinedOutput()
 	if err != nil {
@@ -81,64 +120,30 @@ func (s *ClusterSuite) TearDownSuite(c *C) {
 }
 
 func (s *ClusterSuite) TestNewCluster(c *C) {
-	var connStrings = getConnStrings()
-	cluster, err := NewPostgreSQLCluster("postgres", connStrings)
-	c.Assert(err, IsNil)
-	defer cluster.Close()
-
-	db := cluster.DB(MASTER)
-	err = db.Ping()
-	c.Assert(err, IsNil)
-}
-
-func (s *ClusterSuite) TestZeroDataSourceError(c *C) {
-	_, err := NewPostgreSQLCluster("postgres", []string{})
-	c.Assert(err, Equals, ErrZeroDataSource)
-}
-
-func (s *ClusterSuite) TestDublicatedDataSource(c *C) {
-	var connStrings = []string{
-		"user=ubuntu dbname=circle_test",
-		"user=ubuntu dbname=circle_test",
-	}
-
-	_, err := NewPostgreSQLCluster("postgres", connStrings)
-	c.Assert(err, Equals, ErrDublicatedDataSource)
+	db := s.cluster.DB(MASTER)
+	c.Assert(db.Ping(), IsNil)
 }
 
 func (s *ClusterSuite) TestOverWatch(c *C) {
-	var connStrings = getConnStrings()
+	db1 := s.cluster.DB(MASTER)
+	c.Assert(db1.Ping(), IsNil)
 
-	cluster, err := NewPostgreSQLCluster("postgres", connStrings)
-	c.Assert(err, IsNil)
-	defer cluster.Close()
+	time.Sleep(time.Second * 7)
 
-	db1 := cluster.DB(MASTER)
-	err = db1.Ping()
-	c.Assert(err, IsNil)
-
-	time.Sleep(time.Second * 10)
-	db2 := cluster.DB(MASTER)
-	err = db2.Ping()
-	c.Assert(err, IsNil)
+	db2 := s.cluster.DB(MASTER)
+	c.Assert(db2.Ping(), IsNil)
 
 	c.Assert(db1 == db2, Equals, true)
 }
 
 func (s *ClusterSuite) TestReElect(c *C) {
-	var connStrings = getConnStrings()
-
-	cluster, err := NewPostgreSQLCluster("postgres", connStrings)
-	c.Assert(err, IsNil)
-	defer cluster.Close()
-
-	db1 := cluster.DB(MASTER)
+	db1 := s.cluster.DB(MASTER)
 	c.Assert(db1.Ping(), IsNil)
 
 	s.SwitchOver(c)
 	c.Assert(isMaster(db1), Equals, false)
 
-	cluster.ReElect()
-	master := cluster.DB(MASTER)
+	s.cluster.ReElect()
+	master := s.cluster.DB(MASTER)
 	c.Assert(master.Ping(), IsNil)
 }
