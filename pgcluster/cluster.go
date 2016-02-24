@@ -93,6 +93,24 @@ func NewPostgreSQLCluster(drivername string, connStrings []string) (*Cluster, er
 	return cluster, nil
 }
 
+// NOTE: SetConnMaxLifetime implement fot go1.6 only
+
+// SetMaxIdleConns sets the maximum number of connections
+// in the idle connection pool for each memeber of a cluster
+func (c *Cluster) SetMaxIdleConns(n int) {
+	for _, db := range c.dbs {
+		db.SetMaxIdleConns(n)
+	}
+}
+
+// SetMaxOpenConns sets the maximum number of open connections
+// to the database for each memeber of a cluster
+func (c *Cluster) SetMaxOpenConns(n int) {
+	for _, db := range c.dbs {
+		db.SetMaxOpenConns(n)
+	}
+}
+
 // Close closes connections per each db contained in Cluster.
 // An error fron each Close is collected.
 func (c *Cluster) Close() error {

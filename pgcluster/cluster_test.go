@@ -122,6 +122,9 @@ func (s *ClusterSuite) TearDownTest(c *C) {
 func (s *ClusterSuite) TestNewCluster(c *C) {
 	db := s.cluster.DB(MASTER)
 	c.Assert(db.Ping(), IsNil)
+
+	db.SetMaxIdleConns(10)
+	db.SetMaxOpenConns(20)
 }
 
 func (s *ClusterSuite) TestOverWatch(c *C) {
